@@ -12,9 +12,9 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showErrorMessage('Please select the Expected VP.');
       return;
     }
+    
     const actual = await vscode.window.showOpenDialog({ 
       canSelectMany: false, 
-      filters: { 'VP file or Image file': ['', 'png', 'jpg', 'jpeg'] },
       openLabel: 'Please select Actual VP or Image'
      });
     if (!actual || actual.length !== 1) {
