@@ -2,7 +2,7 @@
   "name": "vp-compare",
   "displayName": "VP Compare",
   "description": "Compare base64 images within VP files",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "engines": {
     "vscode": "^1.97.0"
   },
@@ -33,7 +33,12 @@
     "vscode-test": "^1.4.0"
   },
   "dependencies": {
-    "base64-img": "^1.0.4",
-    "xml2js": "^0.4.23"
+    "@types/sharp": "^0.31.1",
+    "@types/xmldom": "^0.1.34",
+    "base64-img": "^1.0.1",
+    "gif-encoder-2": "^1.0.5",
+    "sharp": "^0.33.5",
+    "xml2js": "^0.6.2",
+    "xmldom": "^0.6.0"
   }
 }

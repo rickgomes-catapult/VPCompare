@@ -1,5 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
+import sharp = require('sharp');
+import { DOMParser } from 'xmldom';
+import { createGif } from './gifUtils';
 
 export function activate(context: vscode.ExtensionContext) {
   let disposable = vscode.commands.registerCommand('vpCompare.compareImages', async () => {
@@ -24,18 +28,25 @@ export function activate(context: vscode.ExtensionContext) {
 
     const image1 = await extractImageFromFile(expected[0].fsPath);
     const image2 = await extractImageOrFile(actual[0].fsPath);
+    const mask = await extractMask(expected[0].fsPath);
 
     if (image1 && image2) {
+      const maskedImage1 = await generateImageWithMask(image1, mask, path.basename(expected[0].fsPath)+'.png');
+      const maskedImage2 = await generateImageWithMask(image2, mask, path.basename(actual[0].fsPath)+'.png');
+      const gifPath = await createGif(maskedImage1, maskedImage2);
+
       const panel = vscode.window.createWebviewPanel(
         'vpCompare',
         'VP Compare',
         vscode.ViewColumn.One,
         {
-          enableScripts: true
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.file(path.dirname(gifPath))]
         }
       );
 
-      panel.webview.html = getWebviewContent(image1, image2);
+      const gifUri = vscode.Uri.file(gifPath);
+      panel.webview.html = `<img src="${panel.webview.asWebviewUri(gifUri)}" />`;
 
       panel.webview.onDidReceiveMessage(async message => {
         if (message.command === 'replaceImage') {
@@ -80,28 +91,62 @@ async function extractImageOrFile(filePath: string): Promise<string | null> {
   }
 }
 
-function getWebviewContent(image1: string, image2: string): string {
-  return `
-    <html>
-      <body>
-        <div style="display: flex; justify-content: center; align-items: center; height: 100vh;">
-          <img id="image" src="data:image/png;base64,${image1}" style="width: 100%;" />
-        </div>
-        <button onclick="replaceImage()">Replace Expected Image with Actual Image</button>
-        <script>
-          const vscode = acquireVsCodeApi();
-          let showFirstImage = true;
-          setInterval(() => {
-            showFirstImage = !showFirstImage;
-            document.getElementById('image').src = showFirstImage ? 'data:image/png;base64,${image1}' : 'data:image/png;base64,${image2}';
-          }, 2000);
-          function replaceImage() {
-            vscode.postMessage({ command: 'replaceImage' });
-          }
-        </script>
-      </body>
-    </html>
-  `;
+async function extractMask(filePath: string): Promise<string | null> {
+  const content = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+  const xml = content.toString();
+  const maskStartIndex = xml.indexOf('<Mask>');
+  const maskEndIndex = xml.indexOf('</Mask>');
+
+  if (maskStartIndex > 0 && maskEndIndex > 0) {
+    return xml.substring(maskStartIndex + '<Mask>'.length, maskEndIndex + '</Mask>'.length).trim();
+  }
+
+  return null;
+}
+
+async function generateImageWithMask(image: string, mask: string | null, originalFileName: string): Promise<string> {
+  const imageBuffer = Buffer.from(image, 'base64');
+  let img = sharp(imageBuffer);
+
+  if (mask) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(mask, "text/xml");
+    const rect = xmlDoc.getElementsByTagName("Rect")[0];
+
+    if (rect) {
+      const x = parseInt(rect.getAttribute("x") || "0");
+      const y = parseInt(rect.getAttribute("y") || "0");
+      const width = parseInt(rect.getAttribute("width") || "0");
+      const height = parseInt(rect.getAttribute("height") || "0");
+      const type = rect.getAttribute("type");
+
+      const overlay = sharp({
+        create: {
+          width: width,
+          height: height,
+          channels: 4,
+          background: type === 'negative' ? { r: 0, g: 0, b: 0, alpha: 1 } : { r: 0, g: 0, b: 0, alpha: 0 }
+        }
+      }).png();
+
+      if (type === 'positive') {
+        overlay.extend({
+          top: y,
+          left: x,
+          bottom: await img.metadata().then((meta: sharp.Metadata) => meta.height! - y - height),
+          right: await img.metadata().then((meta: sharp.Metadata) => meta.width! - x - width),
+          background: { r: 0, g: 0, b: 0, alpha: 0 }
+        }).composite([{ input: Buffer.from(`<svg><rect x="${x}" y="${y}" width="${width}" height="${height}" fill="none" stroke="rgba(0,0,0,0.5)" stroke-width="2"/></svg>`), blend: 'over' }]);
+      }
+
+      img = img.composite([{ input: await overlay.toBuffer(), top: y, left: x }]);
+    }
+  }
+
+  const outputFilePath = path.join(os.tmpdir(), originalFileName);
+  await img.toFile(outputFilePath);
+
+  return outputFilePath;
 }
 
 async function replaceImageInFile(filePath: string, newImage: string): Promise<void> {
